@@ -6,6 +6,17 @@ const statusMeta = {
   key: { label: "重点客户", color: "#256fd8" },
 };
 
+const companyMeta = [
+  { keyword: "京东", label: "京东", color: "#d71920" },
+  { keyword: "顺丰", label: "顺丰", color: "#1b1f24" },
+  { keyword: "中通", label: "中通", color: "#1769e0" },
+  { keyword: "圆通", label: "圆通", color: "#18a058" },
+  { keyword: "极兔", label: "极兔", color: "#ef6f6c" },
+  { keyword: "韵达", label: "韵达", color: "#f3bf16" },
+  { keyword: "申通", label: "申通", color: "#87919d" },
+  { keyword: "菜鸟", label: "菜鸟", color: "#61b7ef" },
+];
+
 const navItems = [
   ["map", "地图"],
   ["today", "今日拜访"],
@@ -28,6 +39,7 @@ const state = {
   mapSearchResults: [],
   mapMessage: "",
   mapFocus: null,
+  mapPanel: "",
   visitText: "",
   extracted: null,
   siteForm: null,
@@ -121,6 +133,11 @@ function statusLabel(status) {
   return statusMeta[status]?.label || status || "未设置";
 }
 
+function companyFor(site) {
+  const text = `${site?.brand || ""} ${site?.name || ""}`;
+  return companyMeta.find((item) => text.includes(item.keyword)) || { label: site?.brand || "站点", color: "#159a72" };
+}
+
 function filteredSites() {
   const query = state.query.trim().toLowerCase();
   return sites.filter((site) => {
@@ -190,13 +207,15 @@ function renderMapView() {
           <strong>郑州快递站点</strong>
           <span>${visibleSites.length} / ${sites.length} 个站点</span>
         </div>
-        ${renderMapLocator()}
-        <div class="map-search-card">
+        ${renderMapToolbar(visibleSites.length, selected)}
+        ${state.mapPanel === "locate" ? renderMapLocator() : ""}
+        ${state.mapPanel === "sites" ? `
+        <div class="map-search-card map-drawer">
           ${renderSearchControls()}
           <div class="site-list compact">
             ${visibleSites.length ? visibleSites.map(renderSiteListItem).join("") : renderEmpty("没有匹配的站点")}
           </div>
-        </div>
+        </div>` : ""}
         <div class="route-floating">
           <div>
             <strong>今日拜访路线</strong>
@@ -204,17 +223,42 @@ function renderMapView() {
           </div>
           <button data-action="autoRoute">自动规划</button>
         </div>
+        ${state.mapPanel === "detail" ? `
         <aside class="detail-panel map-detail">
           ${renderSiteDetail(selected)}
-        </aside>
+        </aside>` : ""}
       </div>
     </section>
   `;
 }
 
+function renderMapToolbar(visibleCount, selected) {
+  const selectedName = selected?.name || "未选站点";
+  const tools = [
+    ["sites", "站点", `${visibleCount}/${sites.length}`],
+    ["locate", "定位", "找地址"],
+    ["detail", "详情", selectedName],
+  ];
+  return `
+    <div class="map-toolbar" aria-label="地图工具">
+      ${tools.map(([panel, label, meta]) => `
+        <button
+          class="${state.mapPanel === panel ? "active" : ""}"
+          data-action="toggleMapPanel"
+          data-panel="${panel}"
+          title="${escapeHtml(label)}"
+        >
+          <strong>${escapeHtml(label)}</strong>
+          <span>${escapeHtml(meta)}</span>
+        </button>
+      `).join("")}
+    </div>
+  `;
+}
+
 function renderMapLocator() {
   return `
-    <div class="map-locator-card">
+    <div class="map-locator-card map-drawer">
       <div class="locator-title">
         <strong>地图定位</strong>
         <span>搜索地址或现场取点</span>
@@ -272,23 +316,25 @@ function renderRealMap() {
   const bounds = [];
   filteredSites().forEach((site) => {
     if (!Number.isFinite(Number(site.lat)) || !Number.isFinite(Number(site.lng))) return;
-    const meta = statusMeta[site.status] || statusMeta.target;
+    const company = companyFor(site);
     const marker = L.marker([site.lat, site.lng], {
       icon: L.divIcon({
         className: "crm-marker-wrap",
         html: `
-          <div class="crm-marker ${state.selectedSiteId === site.id ? "selected" : ""}" style="--color:${meta.color}">
-            <strong>${escapeHtml(site.brand || "站点")}</strong>
+          <div class="crm-marker ${state.selectedSiteId === site.id ? "selected" : ""}" style="--color:${company.color}">
+            <strong>${escapeHtml(company.label || site.brand || "站点")}</strong>
             <span>${escapeHtml(site.district || "")}</span>
           </div>
         `,
-        iconSize: [76, 50],
-        iconAnchor: [38, 25],
+        iconSize: [64, 42],
+        iconAnchor: [32, 21],
       }),
     }).addTo(map);
     marker.on("click", (event) => {
       L.DomEvent.stopPropagation(event);
       state.selectedSiteId = site.id;
+      state.mapFocus = { lat: site.lat, lng: site.lng, label: site.name, zoom: 15 };
+      state.mapPanel = "detail";
       render();
     });
     bounds.push([site.lat, site.lng]);
@@ -332,7 +378,7 @@ function renderRealMap() {
   });
 
   if (bounds.length) {
-    map.fitBounds(bounds, { padding: [80, 80], maxZoom: 13 });
+    map.fitBounds(bounds, mapFitOptions());
   }
   if (state.mapFocus) {
     map.setView([state.mapFocus.lat, state.mapFocus.lng], state.mapFocus.zoom || 16);
@@ -343,9 +389,16 @@ function renderRealMap() {
     if (state.mapFocus) {
       map.setView([state.mapFocus.lat, state.mapFocus.lng], state.mapFocus.zoom || 16);
     } else if (bounds.length) {
-      map.fitBounds(bounds, { padding: [80, 80], maxZoom: 13 });
+      map.fitBounds(bounds, mapFitOptions());
     }
   }, 80);
+}
+
+function mapFitOptions() {
+  if (window.matchMedia("(max-width: 760px)").matches) {
+    return { padding: [140, 140], maxZoom: 12 };
+  }
+  return { padding: [80, 80], maxZoom: 13 };
 }
 
 function renderSearchControls() {
@@ -367,9 +420,10 @@ function renderFilter(key, label) {
 
 function renderSiteListItem(site) {
   const meta = statusMeta[site.status] || statusMeta.target;
+  const company = companyFor(site);
   return `
     <button class="site-list-item ${state.selectedSiteId === site.id ? "active" : ""}" data-action="selectSite" data-site-id="${site.id}">
-      <i style="--color:${meta.color}"></i>
+      <i style="--color:${company.color}"></i>
       <span>
         <strong>${escapeHtml(site.name)}</strong>
         <em>${escapeHtml(site.district)} · ${escapeHtml(site.brand)} · ${escapeHtml(meta.label)}</em>
@@ -811,6 +865,13 @@ async function handleAction(event) {
   const action = event.currentTarget.dataset.action;
   const siteId = Number(event.currentTarget.dataset.siteId);
 
+  if (action === "toggleMapPanel") {
+    const panel = event.currentTarget.dataset.panel;
+    state.mapPanel = state.mapPanel === panel ? "" : panel;
+    render();
+    return;
+  }
+
   if (action === "closeModal") {
     if (event.currentTarget.classList.contains("modal-backdrop") && event.target !== event.currentTarget) return;
     state.siteForm = null;
@@ -840,6 +901,7 @@ async function handleAction(event) {
     const site = getSiteById(siteId);
     if (site) state.mapFocus = { lat: site.lat, lng: site.lng, label: site.name, zoom: 15 };
     if (state.view === "today" || state.view === "sites") state.view = "map";
+    state.mapPanel = "detail";
     render();
     return;
   }
