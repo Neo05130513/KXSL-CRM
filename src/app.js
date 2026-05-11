@@ -7,34 +7,61 @@ const statusMeta = {
 };
 
 const companyMeta = [
-  { keyword: "京东", label: "京东", color: "#d71920" },
-  { keyword: "顺丰", label: "顺丰", color: "#1b1f24" },
-  { keyword: "中通", label: "中通", color: "#1769e0" },
-  { keyword: "圆通", label: "圆通", color: "#18a058" },
-  { keyword: "极兔", label: "极兔", color: "#ef6f6c" },
-  { keyword: "韵达", label: "韵达", color: "#f3bf16" },
-  { keyword: "申通", label: "申通", color: "#87919d" },
-  { keyword: "菜鸟", label: "菜鸟", color: "#61b7ef" },
+  { keyword: "京东", label: "京东", color: "#d71920", shape: "diamond" },
+  { keyword: "顺丰", label: "顺丰", color: "#1b1f24", shape: "square" },
+  { keyword: "中通", label: "中通", color: "#1769e0", shape: "circle" },
+  { keyword: "圆通", label: "圆通", color: "#18a058", shape: "triangle" },
+  { keyword: "极兔", label: "极兔", color: "#ef6f6c", shape: "hex" },
+  { keyword: "韵达", label: "韵达", color: "#f3bf16", shape: "pin" },
+  { keyword: "申通", label: "申通", color: "#87919d", shape: "square" },
+  { keyword: "菜鸟", label: "菜鸟", color: "#61b7ef", shape: "circle" },
+  { keyword: "德邦", label: "德邦", color: "#f7c600", shape: "diamond" },
+  { keyword: "邮政", label: "邮政", color: "#0b8f4d", shape: "hex" },
 ];
+
+const discoveryBrands = ["京东快递", "顺丰速运", "中通快递", "圆通速递", "极兔速递", "韵达快递", "申通快递", "菜鸟驿站", "德邦快递", "邮政快递"];
+const zhengzhouDistricts = ["", "金水区", "二七区", "管城区", "中原区", "郑东新区", "惠济区", "高新区", "经开区", "航空港区", "新郑市", "中牟县", "荥阳市", "上街区"];
 
 const navItems = [
   ["map", "地图"],
-  ["today", "今日拜访"],
+  ["discovery", "发现"],
+  ["followups", "跟进"],
+  ["today", "拜访"],
   ["sites", "站点"],
-  ["assistant", "拜访助手"],
+  ["assistant", "记录"],
+  ["assets", "车辆合同"],
   ["dashboard", "看板"],
   ["settings", "数据"],
 ];
 
 let sites = [];
 let visits = [];
+let vehicles = [];
+let contracts = [];
+let payments = [];
+let serviceTickets = [];
+let backups = [];
+let currentUser = null;
+let users = [];
 
 const state = {
   view: "map",
+  authenticated: false,
   filter: "all",
   query: "",
   selectedSiteId: null,
   routeIds: [],
+  discovery: {
+    city: "郑州",
+    district: "",
+    brand: "京东快递",
+    keyword: "",
+    pages: 2,
+    results: [],
+    selected: new Set(),
+    loading: false,
+    message: "",
+  },
   mapSearch: "",
   mapSearchResults: [],
   mapMessage: "",
@@ -44,6 +71,7 @@ const state = {
   extracted: null,
   siteForm: null,
   loading: true,
+  loginError: "",
   error: "",
 };
 
@@ -67,8 +95,16 @@ async function apiRequest(path, options = {}) {
   if (options.body) init.body = JSON.stringify(options.body);
   const response = await fetch(path, init);
   if (!response.ok) {
-    const text = await response.text();
-    throw new Error(text || `HTTP ${response.status}`);
+    let message = `HTTP ${response.status}`;
+    try {
+      const data = await response.json();
+      message = data.error || message;
+    } catch {
+      message = await response.text() || message;
+    }
+    const error = new Error(message);
+    error.status = response.status;
+    throw error;
   }
   const type = response.headers.get("Content-Type") || "";
   return type.includes("application/json") ? response.json() : response.text();
@@ -76,9 +112,17 @@ async function apiRequest(path, options = {}) {
 
 async function loadData() {
   const data = await apiRequest("/api/bootstrap");
+  currentUser = data.user || null;
+  users = data.users || [];
   sites = data.sites || [];
   visits = data.visits || [];
+  vehicles = data.vehicles || [];
+  contracts = data.contracts || [];
+  payments = data.payments || [];
+  serviceTickets = data.serviceTickets || [];
+  backups = data.backups || [];
   state.routeIds = data.routeIds || [];
+  state.authenticated = true;
   if (!sites.some((site) => site.id === state.selectedSiteId)) {
     state.selectedSiteId = sites[0]?.id || null;
   }
@@ -92,7 +136,12 @@ async function init() {
     render();
   } catch (error) {
     state.loading = false;
-    state.error = error.message || "加载失败";
+    if (error.status === 401) {
+      state.authenticated = false;
+      state.error = "";
+    } else {
+      state.error = error.message || "加载失败";
+    }
     render();
   }
 }
@@ -129,13 +178,50 @@ function getSiteById(id) {
   return sites.find((site) => site.id === Number(id));
 }
 
+function getVehicleById(id) {
+  return vehicles.find((vehicle) => vehicle.id === Number(id));
+}
+
+function getContractById(id) {
+  return contracts.find((contract) => contract.id === Number(id));
+}
+
+function siteName(id) {
+  return getSiteById(id)?.name || "未关联站点";
+}
+
+function vehicleName(id) {
+  const vehicle = getVehicleById(id);
+  return vehicle ? `${vehicle.code}${vehicle.plate ? ` · ${vehicle.plate}` : ""}` : "未关联车辆";
+}
+
+function money(value) {
+  return `¥${Number(value || 0).toFixed(0)}`;
+}
+
 function statusLabel(status) {
   return statusMeta[status]?.label || status || "未设置";
 }
 
+function vehicleStatusLabel(status) {
+  return { idle: "空闲", rented: "在租", repair: "维修", retired: "报废" }[status] || status || "未设置";
+}
+
+function paymentStatusLabel(status) {
+  return { unpaid: "未收", partial: "部分收款", paid: "已收" }[status] || status || "未设置";
+}
+
+function ticketStatusLabel(status) {
+  return { open: "待处理", processing: "处理中", resolved: "已解决" }[status] || status || "未设置";
+}
+
+function roleLabel(role) {
+  return { owner: "老板/管理员", sales: "业务员", viewer: "只读查看" }[role] || role || "未设置";
+}
+
 function companyFor(site) {
   const text = `${site?.brand || ""} ${site?.name || ""}`;
-  return companyMeta.find((item) => text.includes(item.keyword)) || { label: site?.brand || "站点", color: "#159a72" };
+  return companyMeta.find((item) => text.includes(item.keyword)) || { label: site?.brand || "站点", color: "#159a72", shape: "circle" };
 }
 
 function filteredSites() {
@@ -156,6 +242,11 @@ function routeSites() {
 
 function render() {
   const root = document.querySelector("#app");
+  if (!state.loading && !state.authenticated) {
+    root.innerHTML = renderLoginView();
+    bindLoginEvents();
+    return;
+  }
   root.innerHTML = `
     <div class="app-shell">
       <header class="app-header">
@@ -168,7 +259,10 @@ function render() {
             <button class="${state.view === view ? "active" : ""}" data-view="${view}">${label}</button>
           `).join("")}
         </nav>
-        <button class="primary-action" data-action="newSite">新增站点</button>
+        <div class="app-user">
+          <span>${escapeHtml(currentUser?.name || currentUser?.username || "")}</span>
+          <button class="ghost" data-action="logout">退出</button>
+        </div>
       </header>
       <main class="app-main ${state.view === "map" ? "map-mode" : ""}">
         ${renderCurrentView()}
@@ -185,12 +279,34 @@ function render() {
   }
 }
 
+function renderLoginView() {
+  return `
+    <main class="login-page">
+      <form id="loginForm" class="login-card">
+        <div class="brand login-brand">
+          <strong>知兔</strong>
+          <span>快享市场地图</span>
+        </div>
+        <h1>正式版工作台</h1>
+        <p>站点、拜访、车辆、合同、收款和售后统一管理。</p>
+        <label>账号<input name="username" autocomplete="username" value="admin" /></label>
+        <label>密码<input name="password" type="password" autocomplete="current-password" value="admin123" /></label>
+        ${state.loginError ? `<p class="form-error">${escapeHtml(state.loginError)}</p>` : ""}
+        <button class="primary-action" type="submit">登录</button>
+      </form>
+    </main>
+  `;
+}
+
 function renderCurrentView() {
   if (state.loading) return `<section class="page"><div class="panel"><p class="empty">正在连接数据库...</p></div></section>`;
   if (state.error) return `<section class="page"><div class="panel"><p class="empty">加载失败：${escapeHtml(state.error)}</p></div></section>`;
+  if (state.view === "discovery") return renderDiscoveryView();
+  if (state.view === "followups") return renderFollowupsView();
   if (state.view === "today") return renderTodayView();
   if (state.view === "sites") return renderSitesView();
   if (state.view === "assistant") return renderAssistantView();
+  if (state.view === "assets") return renderAssetsView();
   if (state.view === "dashboard") return renderDashboardView();
   if (state.view === "settings") return renderSettingsView();
   return renderMapView();
@@ -222,6 +338,11 @@ function renderMapView() {
             <span>${routeSites().length} 个站点 · 约 ${estimatedDistance()} 公里 · ${estimatedHours()} 小时</span>
           </div>
           <button data-action="autoRoute">自动规划</button>
+        </div>
+        <div class="map-legend">
+          ${companyMeta.slice(0, 10).map((item) => `
+            <span><i class="legend-dot marker-${item.shape}" style="--color:${item.color}"></i>${escapeHtml(item.label)}</span>
+          `).join("")}
         </div>
         ${state.mapPanel === "detail" ? `
         <aside class="detail-panel map-detail">
@@ -321,13 +442,14 @@ function renderRealMap() {
       icon: L.divIcon({
         className: "crm-marker-wrap",
         html: `
-          <div class="crm-marker ${state.selectedSiteId === site.id ? "selected" : ""}" style="--color:${company.color}">
-            <strong>${escapeHtml(company.label || site.brand || "站点")}</strong>
-            <span>${escapeHtml(site.district || "")}</span>
-          </div>
+          <div
+            class="crm-marker-dot marker-${company.shape || "circle"} ${state.selectedSiteId === site.id ? "selected" : ""}"
+            style="--color:${company.color}"
+            title="${escapeHtml(site.name)}"
+          ></div>
         `,
-        iconSize: [64, 42],
-        iconAnchor: [32, 21],
+        iconSize: [22, 22],
+        iconAnchor: [11, 11],
       }),
     }).addTo(map);
     marker.on("click", (event) => {
@@ -488,6 +610,74 @@ function renderVisitItem(visit) {
   `;
 }
 
+function renderDiscoveryView() {
+  const discovery = state.discovery;
+  const selectedCount = discovery.selected.size;
+  const availableCount = discovery.results.filter((item) => !item.imported).length;
+  return `
+    <section class="page">
+      <div class="page-title">
+        <div>
+          <p class="eyebrow">高德 POI 站点线索</p>
+          <h1>站点发现</h1>
+        </div>
+        <button class="primary-action" data-action="searchDiscovery" ${discovery.loading ? "disabled" : ""}>${discovery.loading ? "搜索中" : "搜索线索"}</button>
+      </div>
+      <div class="panel discovery-panel">
+        <div class="discovery-form">
+          <label>城市<input id="discoveryCity" value="${escapeHtml(discovery.city)}" /></label>
+          <label>区域
+            <select id="discoveryDistrict">
+              ${zhengzhouDistricts.map((district) => `<option value="${escapeHtml(district)}" ${discovery.district === district ? "selected" : ""}>${escapeHtml(district || "全郑州")}</option>`).join("")}
+            </select>
+          </label>
+          <label>品牌
+            <select id="discoveryBrand">
+              ${discoveryBrands.map((brand) => `<option value="${escapeHtml(brand)}" ${discovery.brand === brand ? "selected" : ""}>${escapeHtml(brand)}</option>`).join("")}
+            </select>
+          </label>
+          <label>自定义关键词<input id="discoveryKeyword" value="${escapeHtml(discovery.keyword)}" placeholder="不填则按品牌搜索" /></label>
+          <label>页数
+            <select id="discoveryPages">
+              ${[1, 2, 3, 5, 10].map((page) => `<option value="${page}" ${Number(discovery.pages) === page ? "selected" : ""}>${page} 页</option>`).join("")}
+            </select>
+          </label>
+        </div>
+        <div class="discovery-actions">
+          <span>${discovery.results.length ? `${discovery.results.length} 条候选，${availableCount} 条可导入，已选 ${selectedCount} 条` : "搜索高德 POI 后，勾选确认再导入 CRM"}</span>
+          <div>
+            <button class="ghost" data-action="selectAllDiscovery">选择可导入</button>
+            <button class="primary-action" data-action="importDiscovery" ${selectedCount ? "" : "disabled"}>导入选中</button>
+          </div>
+        </div>
+        ${discovery.message ? `<p class="locator-message">${escapeHtml(discovery.message)}</p>` : ""}
+      </div>
+      <div class="discovery-list">
+        ${discovery.results.length ? discovery.results.map(renderDiscoveryItem).join("") : renderEmpty("还没有候选站点")}
+      </div>
+    </section>
+  `;
+}
+
+function renderDiscoveryItem(item) {
+  const checked = state.discovery.selected.has(item.id);
+  const company = companyFor(item);
+  return `
+    <article class="discovery-item ${item.imported ? "imported" : ""}">
+      <label>
+        <input type="checkbox" data-action="toggleDiscoveryItem" data-poi-id="${escapeHtml(item.id)}" ${checked ? "checked" : ""} ${item.imported ? "disabled" : ""} />
+        <i class="legend-dot marker-${company.shape || "circle"}" style="--color:${company.color}"></i>
+      </label>
+      <div>
+        <strong>${escapeHtml(item.name)}</strong>
+        <span>${escapeHtml(item.brand || "未识别品牌")} · ${escapeHtml(item.district || "未知区域")} · ${escapeHtml(item.type || "POI")}</span>
+        <p>${escapeHtml(item.address || "无地址")} ${item.phone ? ` · ${escapeHtml(item.phone)}` : ""}</p>
+      </div>
+      <b>${item.imported ? "已存在" : "可导入"}</b>
+    </article>
+  `;
+}
+
 function renderTodayView() {
   const planned = routeSites();
   const candidates = sites
@@ -543,6 +733,65 @@ function renderTodayView() {
             `).join("") || "<p class=\"empty\">暂无可补充站点</p>"}
           </div>
         </section>
+      </div>
+    </section>
+  `;
+}
+
+function renderFollowupsView() {
+  const overdue = sites
+    .filter((site) => site.nextFollow && site.nextFollow < todayIso() && site.status !== "paused")
+    .sort((a, b) => String(a.nextFollow).localeCompare(String(b.nextFollow)));
+  const today = sites
+    .filter((site) => site.nextFollow === todayIso() && site.status !== "paused")
+    .sort((a, b) => routeScore(b) - routeScore(a));
+  const upcoming = sites
+    .filter((site) => site.nextFollow > todayIso() && site.nextFollow <= addDays(7) && site.status !== "paused")
+    .sort((a, b) => String(a.nextFollow).localeCompare(String(b.nextFollow)));
+  const noPlan = sites.filter((site) => !site.nextFollow && site.status !== "paused").slice(0, 8);
+  return `
+    <section class="page">
+      <div class="page-title">
+        <div>
+          <p class="eyebrow">${todayIso()}</p>
+          <h1>跟进工作台</h1>
+        </div>
+        <button class="primary-action" data-action="routeDueSites">把应跟进加入路线</button>
+      </div>
+      <div class="summary-strip">
+        <div><strong>${overdue.length}</strong><span>逾期未跟进</span></div>
+        <div><strong>${today.length}</strong><span>今日应跟进</span></div>
+        <div><strong>${upcoming.length}</strong><span>7 天内跟进</span></div>
+        <div><strong>${noPlan.length}</strong><span>未设计划</span></div>
+      </div>
+      <div class="followup-grid">
+        ${renderFollowupPanel("逾期未跟进", overdue, "danger-list")}
+        ${renderFollowupPanel("今日应跟进", today)}
+        ${renderFollowupPanel("即将跟进", upcoming)}
+        ${renderFollowupPanel("未设置下次跟进", noPlan)}
+      </div>
+    </section>
+  `;
+}
+
+function renderFollowupPanel(title, rows, extraClass = "") {
+  return `
+    <section class="panel followup-panel ${extraClass}">
+      <div class="panel-title"><h2>${escapeHtml(title)}</h2></div>
+      <div class="work-list">
+        ${rows.length ? rows.map((site) => `
+          <article>
+            <div>
+              <strong>${escapeHtml(site.name)}</strong>
+              <span>${escapeHtml(site.district)} · ${escapeHtml(statusLabel(site.status))} · ${escapeHtml(site.intentLevel || "未知")} · ${escapeHtml(site.nextFollow || "未设置")}</span>
+            </div>
+            <div class="row-actions">
+              <button data-action="addToRoute" data-site-id="${site.id}">路线</button>
+              <button class="secondary" data-action="recordVisit" data-site-id="${site.id}">记录</button>
+              <button class="ghost" data-action="completeFollowup" data-site-id="${site.id}">+7天</button>
+            </div>
+          </article>
+        `).join("") : renderEmpty("暂无记录")}
       </div>
     </section>
   `;
@@ -635,12 +884,171 @@ function renderExtracted(data) {
   `;
 }
 
+function renderAssetsView() {
+  const idleVehicles = vehicles.filter((item) => item.status === "idle").length;
+  const activeContracts = contracts.filter((item) => item.status === "active").length;
+  const unpaidTotal = payments
+    .filter((item) => item.status !== "paid")
+    .reduce((sum, item) => sum + Math.max(0, Number(item.amount) - Number(item.paidAmount || 0)), 0);
+  const openTickets = serviceTickets.filter((item) => item.status !== "resolved").length;
+  return `
+    <section class="page">
+      <div class="page-title">
+        <div>
+          <p class="eyebrow">车辆、合同、租金、售后</p>
+          <h1>经营资产</h1>
+        </div>
+      </div>
+      <div class="summary-strip">
+        <div><strong>${vehicles.length}</strong><span>车辆总数</span></div>
+        <div><strong>${idleVehicles}</strong><span>空闲车辆</span></div>
+        <div><strong>${activeContracts}</strong><span>有效合同</span></div>
+        <div><strong>${money(unpaidTotal)}</strong><span>待收租金</span></div>
+      </div>
+      <div class="asset-grid">
+        ${renderVehiclePanel()}
+        ${renderContractPanel()}
+        ${renderPaymentPanel()}
+        ${renderServicePanel(openTickets)}
+      </div>
+    </section>
+  `;
+}
+
+function renderSiteOptions(selected = "") {
+  return `<option value="">选择站点</option>${sites.map((site) => `<option value="${site.id}" ${Number(selected) === site.id ? "selected" : ""}>${escapeHtml(site.name)}</option>`).join("")}`;
+}
+
+function renderVehicleOptions(selected = "") {
+  return `<option value="">不关联车辆</option>${vehicles.map((vehicle) => `<option value="${vehicle.id}" ${Number(selected) === vehicle.id ? "selected" : ""}>${escapeHtml(vehicle.code)}${vehicle.plate ? ` · ${escapeHtml(vehicle.plate)}` : ""}</option>`).join("")}`;
+}
+
+function renderContractOptions(selected = "") {
+  return `<option value="">不关联合同</option>${contracts.map((contract) => `<option value="${contract.id}" ${Number(selected) === contract.id ? "selected" : ""}>${escapeHtml(contract.title || `${siteName(contract.siteId)}合同`)}</option>`).join("")}`;
+}
+
+function renderVehiclePanel() {
+  return `
+    <section class="panel asset-panel">
+      <div class="panel-title"><h2>车辆台账</h2></div>
+      <form id="vehicleForm" class="compact-form">
+        <input name="code" placeholder="车辆编号" required />
+        <input name="plate" placeholder="车牌/识别码" />
+        <input name="model" placeholder="车型" />
+        <select name="status">
+          <option value="idle">空闲</option>
+          <option value="rented">在租</option>
+          <option value="repair">维修</option>
+          <option value="retired">报废</option>
+        </select>
+        <select name="siteId">${renderSiteOptions()}</select>
+        <input name="monthlyRent" type="number" min="0" placeholder="月租" />
+        <button class="primary-action" type="submit">新增车辆</button>
+      </form>
+      <div class="ops-table">
+        ${vehicles.length ? vehicles.slice(0, 10).map((vehicle) => `
+          <article>
+            <div><strong>${escapeHtml(vehicle.code)}</strong><span>${escapeHtml(vehicle.model || "未填车型")} · ${escapeHtml(vehicleStatusLabel(vehicle.status))}</span></div>
+            <span>${escapeHtml(siteName(vehicle.siteId))}</span>
+            <span>${money(vehicle.monthlyRent)}</span>
+          </article>
+        `).join("") : renderEmpty("还没有车辆台账")}
+      </div>
+    </section>
+  `;
+}
+
+function renderContractPanel() {
+  const expiring = contracts.filter((item) => item.status === "active" && item.endDate && item.endDate <= addDays(30));
+  return `
+    <section class="panel asset-panel">
+      <div class="panel-title"><h2>合同到期</h2><span class="mini-badge">${expiring.length} 个 30 天内到期</span></div>
+      <form id="contractForm" class="compact-form">
+        <select name="siteId" required>${renderSiteOptions()}</select>
+        <input name="title" placeholder="合同名称" />
+        <input name="vehicleCount" type="number" min="0" placeholder="车辆数" />
+        <input name="startDate" type="date" />
+        <input name="endDate" type="date" />
+        <input name="monthlyRent" type="number" min="0" placeholder="月租" />
+        <input name="deposit" type="number" min="0" placeholder="押金" />
+        <button class="primary-action" type="submit">新增合同</button>
+      </form>
+      <div class="ops-table">
+        ${contracts.length ? contracts.slice(0, 10).map((contract) => `
+          <article class="${contract.status === "active" && contract.endDate && contract.endDate <= addDays(30) ? "warn-row" : ""}">
+            <div><strong>${escapeHtml(contract.title || siteName(contract.siteId))}</strong><span>${escapeHtml(siteName(contract.siteId))} · ${escapeHtml(contract.endDate || "未设到期")}</span></div>
+            <span>${contract.vehicleCount || 0} 台</span>
+            <button class="ghost" data-action="closeContract" data-contract-id="${contract.id}">${contract.status === "active" ? "结束" : "已结束"}</button>
+          </article>
+        `).join("") : renderEmpty("还没有合同记录")}
+      </div>
+    </section>
+  `;
+}
+
+function renderPaymentPanel() {
+  return `
+    <section class="panel asset-panel">
+      <div class="panel-title"><h2>租金收款</h2></div>
+      <form id="paymentForm" class="compact-form">
+        <select name="siteId" required>${renderSiteOptions()}</select>
+        <select name="contractId">${renderContractOptions()}</select>
+        <input name="dueDate" type="date" value="${todayIso()}" />
+        <input name="amount" type="number" min="0" placeholder="应收金额" required />
+        <input name="note" placeholder="备注" />
+        <button class="primary-action" type="submit">新增应收</button>
+      </form>
+      <div class="ops-table">
+        ${payments.length ? payments.slice(0, 10).map((payment) => `
+          <article class="${payment.status !== "paid" && payment.dueDate && payment.dueDate < todayIso() ? "warn-row" : ""}">
+            <div><strong>${escapeHtml(siteName(payment.siteId))}</strong><span>${escapeHtml(payment.dueDate || "未设日期")} · ${escapeHtml(paymentStatusLabel(payment.status))}</span></div>
+            <span>${money(payment.amount)}</span>
+            <button class="ghost" data-action="markPaymentPaid" data-payment-id="${payment.id}">${payment.status === "paid" ? "已收" : "标记已收"}</button>
+          </article>
+        `).join("") : renderEmpty("还没有应收记录")}
+      </div>
+    </section>
+  `;
+}
+
+function renderServicePanel(openTickets) {
+  return `
+    <section class="panel asset-panel">
+      <div class="panel-title"><h2>售后工单</h2><span class="mini-badge">${openTickets} 个待处理</span></div>
+      <form id="ticketForm" class="compact-form">
+        <select name="siteId" required>${renderSiteOptions()}</select>
+        <select name="vehicleId">${renderVehicleOptions()}</select>
+        <input name="title" placeholder="售后问题" required />
+        <select name="priority">
+          <option value="normal">普通</option>
+          <option value="high">紧急</option>
+        </select>
+        <input name="summary" placeholder="处理说明" />
+        <button class="primary-action" type="submit">新增工单</button>
+      </form>
+      <div class="ops-table">
+        ${serviceTickets.length ? serviceTickets.slice(0, 10).map((ticket) => `
+          <article class="${ticket.status !== "resolved" ? "warn-row" : ""}">
+            <div><strong>${escapeHtml(ticket.title)}</strong><span>${escapeHtml(siteName(ticket.siteId))} · ${escapeHtml(vehicleName(ticket.vehicleId))}</span></div>
+            <span>${escapeHtml(ticketStatusLabel(ticket.status))}</span>
+            <button class="ghost" data-action="resolveTicket" data-ticket-id="${ticket.id}">${ticket.status === "resolved" ? "已解决" : "解决"}</button>
+          </article>
+        `).join("") : renderEmpty("还没有售后记录")}
+      </div>
+    </section>
+  `;
+}
+
 function renderDashboardView() {
   const activeCount = sites.filter((site) => site.status === "active").length;
   const intentCount = sites.filter((site) => site.status === "intent").length;
   const targetCount = sites.filter((site) => site.status === "target").length;
   const vehicleTotal = sites.reduce((sum, site) => sum + (Number(site.currentVehicles) || 0), 0);
   const potentialTotal = sites.reduce((sum, site) => sum + (Number(site.potentialVehicles) || 0), 0);
+  const idleVehicles = vehicles.filter((item) => item.status === "idle").length;
+  const activeContracts = contracts.filter((item) => item.status === "active").length;
+  const unpaidAmount = payments.filter((item) => item.status !== "paid").reduce((sum, item) => sum + Math.max(0, Number(item.amount) - Number(item.paidAmount || 0)), 0);
+  const openTickets = serviceTickets.filter((item) => item.status !== "resolved").length;
   const month = todayIso().slice(0, 7);
   const monthVisits = visits.filter((visit) => String(visit.time).startsWith(month)).length;
   return `
@@ -660,6 +1068,16 @@ function renderDashboardView() {
         ${renderStat("潜在需求", potentialTotal)}
         ${renderStat("本月拜访", monthVisits)}
         ${renderStat("即将跟进", dueSites(7).length)}
+        ${renderStat("台账车辆", vehicles.length)}
+        ${renderStat("空闲车辆", idleVehicles)}
+        ${renderStat("有效合同", activeContracts)}
+        ${renderStat("待处理售后", openTickets)}
+      </div>
+      <div class="summary-strip">
+        <div><strong>${money(unpaidAmount)}</strong><span>待收租金</span></div>
+        <div><strong>${contracts.filter((item) => item.status === "active" && item.endDate && item.endDate <= addDays(30)).length}</strong><span>30 天内到期合同</span></div>
+        <div><strong>${payments.filter((item) => item.status !== "paid" && item.dueDate && item.dueDate < todayIso()).length}</strong><span>逾期收款</span></div>
+        <div><strong>${backups.length}</strong><span>本机备份</span></div>
       </div>
       <div class="two-column">
         ${renderBarPanel("区域分布", countBy("district"))}
@@ -703,20 +1121,64 @@ function renderSettingsView() {
       <div class="two-column">
         <section class="panel settings-panel">
           <h2>备份与导出</h2>
-          <p>${sites.length} 个站点，${visits.length} 条拜访记录。数据已经写入本机 SQLite 数据库。</p>
+          <p>${sites.length} 个站点，${visits.length} 条拜访，${vehicles.length} 台车辆，${contracts.length} 份合同。数据已经写入本机 SQLite 数据库。</p>
           <div class="actions">
+            <button data-action="createBackup">立即备份</button>
             <button data-action="exportJson">导出 JSON</button>
             <button class="secondary" data-action="exportCsv">导出拜访 CSV</button>
           </div>
+          <div class="backup-list">
+            ${backups.length ? backups.slice(0, 6).map((item) => `
+              <article>
+                <strong>${escapeHtml(item.name)}</strong>
+                <span>${escapeHtml(item.createdAt)} · ${(Number(item.size) / 1024).toFixed(1)} KB</span>
+              </article>
+            `).join("") : renderEmpty("还没有备份文件")}
+          </div>
         </section>
         <section class="panel settings-panel">
-          <h2>导入与重置</h2>
-          <p>导入 JSON 会覆盖当前数据库，建议先导出备份。</p>
+          <h2>账号与导入</h2>
+          <p>当前账号：${escapeHtml(currentUser?.username || "")}。导入 JSON 会覆盖当前业务数据，系统会先自动备份当前数据库。</p>
           <div class="actions">
             <button data-action="chooseImport">导入 JSON</button>
             <input id="importFile" type="file" accept="application/json,.json" hidden />
           </div>
+          <p>生产环境请通过环境变量修改默认账号密码：KXSL_ADMIN_USER、KXSL_ADMIN_PASSWORD。</p>
         </section>
+      </div>
+      ${currentUser?.role === "owner" ? renderUserAdminPanel() : ""}
+    </section>
+  `;
+}
+
+function renderUserAdminPanel() {
+  return `
+    <section class="panel settings-panel user-admin-panel">
+      <div class="panel-title">
+        <h2>账号开通</h2>
+        <span class="mini-badge">${users.length} 个账号</span>
+      </div>
+      <form id="userForm" class="compact-form">
+        <input name="username" placeholder="登录账号" required />
+        <input name="name" placeholder="姓名/备注" />
+        <input name="password" type="password" placeholder="初始密码，至少 6 位" required />
+        <select name="role">
+          <option value="sales">业务员</option>
+          <option value="viewer">只读查看</option>
+          <option value="owner">老板/管理员</option>
+        </select>
+        <button class="primary-action" type="submit">开通账号</button>
+      </form>
+      <div class="ops-table">
+        ${users.length ? users.map((user) => `
+          <article>
+            <div>
+              <strong>${escapeHtml(user.username)}</strong>
+              <span>${escapeHtml(user.name || "未填写姓名")}</span>
+            </div>
+            <span>${escapeHtml(roleLabel(user.role))}</span>
+          </article>
+        `).join("") : renderEmpty("还没有账号")}
       </div>
     </section>
   `;
@@ -803,6 +1265,31 @@ function renderEmpty(text) {
   return `<p class="empty">${escapeHtml(text)}</p>`;
 }
 
+function bindLoginEvents() {
+  document.querySelector("#loginForm")?.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    const form = event.currentTarget;
+    const data = Object.fromEntries(new FormData(form));
+    try {
+      state.loginError = "";
+      await apiRequest("/api/login", {
+        method: "POST",
+        body: {
+          username: data.username,
+          password: data.password,
+        },
+      });
+      await loadData();
+      state.loading = false;
+      state.view = "map";
+      render();
+    } catch (error) {
+      state.loginError = error.message || "登录失败";
+      render();
+    }
+  });
+}
+
 function bindEvents() {
   document.querySelectorAll("[data-view]").forEach((button) => {
     button.addEventListener("click", () => {
@@ -839,6 +1326,23 @@ function bindEvents() {
     }
   });
 
+  const discoveryBindings = [
+    ["#discoveryCity", "city"],
+    ["#discoveryDistrict", "district"],
+    ["#discoveryBrand", "brand"],
+    ["#discoveryKeyword", "keyword"],
+    ["#discoveryPages", "pages"],
+  ];
+  discoveryBindings.forEach(([selector, key]) => {
+    const input = document.querySelector(selector);
+    input?.addEventListener("input", () => {
+      state.discovery[key] = key === "pages" ? Number(input.value) : input.value;
+    });
+    input?.addEventListener("change", () => {
+      state.discovery[key] = key === "pages" ? Number(input.value) : input.value;
+    });
+  });
+
   const visitText = document.querySelector("#visitText");
   visitText?.addEventListener("input", () => {
     state.visitText = visitText.value;
@@ -852,6 +1356,26 @@ function bindEvents() {
     event.preventDefault();
     saveVisitForm(event.currentTarget);
   });
+  document.querySelector("#vehicleForm")?.addEventListener("submit", (event) => {
+    event.preventDefault();
+    saveVehicleForm(event.currentTarget);
+  });
+  document.querySelector("#contractForm")?.addEventListener("submit", (event) => {
+    event.preventDefault();
+    saveContractForm(event.currentTarget);
+  });
+  document.querySelector("#paymentForm")?.addEventListener("submit", (event) => {
+    event.preventDefault();
+    savePaymentForm(event.currentTarget);
+  });
+  document.querySelector("#ticketForm")?.addEventListener("submit", (event) => {
+    event.preventDefault();
+    saveTicketForm(event.currentTarget);
+  });
+  document.querySelector("#userForm")?.addEventListener("submit", (event) => {
+    event.preventDefault();
+    saveUserForm(event.currentTarget);
+  });
   document.querySelector("#importFile")?.addEventListener("change", importJsonFile);
 
   document.querySelectorAll("[data-action]").forEach((element) => {
@@ -864,11 +1388,53 @@ function bindEvents() {
 async function handleAction(event) {
   const action = event.currentTarget.dataset.action;
   const siteId = Number(event.currentTarget.dataset.siteId);
+  const contractId = Number(event.currentTarget.dataset.contractId);
+  const paymentId = Number(event.currentTarget.dataset.paymentId);
+  const ticketId = Number(event.currentTarget.dataset.ticketId);
+
+  if (action === "logout") {
+    await apiRequest("/api/logout", { method: "POST", body: {} });
+    state.authenticated = false;
+    currentUser = null;
+    render();
+    return;
+  }
 
   if (action === "toggleMapPanel") {
     const panel = event.currentTarget.dataset.panel;
     state.mapPanel = state.mapPanel === panel ? "" : panel;
     render();
+    return;
+  }
+
+  if (action === "searchDiscovery") {
+    await searchDiscovery();
+    return;
+  }
+
+  if (action === "toggleDiscoveryItem") {
+    const poiId = event.currentTarget.dataset.poiId;
+    if (event.currentTarget.checked) {
+      state.discovery.selected.add(poiId);
+    } else {
+      state.discovery.selected.delete(poiId);
+    }
+    render();
+    return;
+  }
+
+  if (action === "selectAllDiscovery") {
+    const next = new Set();
+    state.discovery.results.forEach((item) => {
+      if (!item.imported) next.add(item.id);
+    });
+    state.discovery.selected = next;
+    render();
+    return;
+  }
+
+  if (action === "importDiscovery") {
+    await importDiscovery();
     return;
   }
 
@@ -956,6 +1522,23 @@ async function handleAction(event) {
     return;
   }
 
+  if (action === "routeDueSites") {
+    const due = sites
+      .filter((site) => site.nextFollow && site.nextFollow <= todayIso() && site.status !== "paused")
+      .sort((a, b) => routeScore(b) - routeScore(a))
+      .slice(0, 8)
+      .map((site) => site.id);
+    await setRoute([...new Set([...state.routeIds, ...due])]);
+    state.view = "today";
+    render();
+    return;
+  }
+
+  if (action === "completeFollowup") {
+    await completeFollowup(siteId);
+    return;
+  }
+
   if (action === "clearRoute") {
     await setRoute([]);
     return;
@@ -1008,6 +1591,28 @@ async function handleAction(event) {
     return;
   }
 
+  if (action === "createBackup") {
+    const data = await apiRequest("/api/backup", { method: "POST", body: {} });
+    backups = data.backups || backups;
+    render();
+    return;
+  }
+
+  if (action === "closeContract") {
+    await closeContract(contractId);
+    return;
+  }
+
+  if (action === "markPaymentPaid") {
+    await markPaymentPaid(paymentId);
+    return;
+  }
+
+  if (action === "resolveTicket") {
+    await resolveTicket(ticketId);
+    return;
+  }
+
   if (action === "chooseImport") {
     document.querySelector("#importFile")?.click();
   }
@@ -1044,6 +1649,69 @@ async function runMapSearch() {
     state.mapMessage = `定位失败：${error.message}`;
   }
   render();
+}
+
+async function searchDiscovery() {
+  state.discovery.city = document.querySelector("#discoveryCity")?.value.trim() || state.discovery.city;
+  state.discovery.district = document.querySelector("#discoveryDistrict")?.value || "";
+  state.discovery.brand = document.querySelector("#discoveryBrand")?.value || state.discovery.brand;
+  state.discovery.keyword = document.querySelector("#discoveryKeyword")?.value.trim() || "";
+  state.discovery.pages = Number(document.querySelector("#discoveryPages")?.value || state.discovery.pages || 2);
+  state.discovery.loading = true;
+  state.discovery.message = "正在调用高德 POI 搜索...";
+  state.discovery.results = [];
+  state.discovery.selected = new Set();
+  render();
+  try {
+    const data = await apiRequest("/api/discovery/search", {
+      method: "POST",
+      body: {
+        city: state.discovery.city,
+        district: state.discovery.district,
+        brand: state.discovery.brand,
+        keyword: state.discovery.keyword,
+        pages: state.discovery.pages,
+      },
+    });
+    state.discovery.results = data.results || [];
+    state.discovery.selected = new Set();
+    state.discovery.results.forEach((item) => {
+      if (!item.imported) state.discovery.selected.add(item.id);
+    });
+    const available = state.discovery.results.filter((item) => !item.imported).length;
+    state.discovery.message = `找到 ${state.discovery.results.length} 条候选，${available} 条可导入。`;
+  } catch (error) {
+    state.discovery.message = `站点发现失败：${error.message}`;
+  }
+  state.discovery.loading = false;
+  render();
+}
+
+async function importDiscovery() {
+  const selected = state.discovery.results.filter((item) => state.discovery.selected.has(item.id) && !item.imported);
+  if (!selected.length) return;
+  if (!confirm(`确认导入 ${selected.length} 个站点为未拜访目标站点？`)) return;
+  try {
+    const data = await apiRequest("/api/discovery/import", {
+      method: "POST",
+      body: { items: selected },
+    });
+    sites = data.sites || sites;
+    visits = data.visits || visits;
+    vehicles = data.vehicles || vehicles;
+    contracts = data.contracts || contracts;
+    payments = data.payments || payments;
+    serviceTickets = data.serviceTickets || serviceTickets;
+    backups = data.backups || backups;
+    state.routeIds = data.routeIds || state.routeIds;
+    const importedIds = new Set((data.imported || []).map((site) => site.externalId).filter(Boolean));
+    state.discovery.results = state.discovery.results.map((item) => importedIds.has(item.id) ? { ...item, imported: true } : item);
+    state.discovery.selected = new Set();
+    state.discovery.message = `已导入 ${(data.imported || []).length} 个站点，跳过 ${(data.skipped || []).length} 个重复项。`;
+    render();
+  } catch (error) {
+    alert(`导入失败：${error.message}`);
+  }
 }
 
 function focusSearchResult(index) {
@@ -1283,6 +1951,193 @@ async function setRoute(routeIds) {
   }
 }
 
+async function completeFollowup(siteId) {
+  const site = getSiteById(siteId);
+  if (!site) return;
+  const payload = {
+    ...site,
+    lastVisit: todayIso(),
+    nextFollow: addDays(7),
+  };
+  try {
+    await apiRequest(`/api/sites/${siteId}`, { method: "PUT", body: payload });
+    await loadData();
+    render();
+  } catch (error) {
+    alert(`跟进更新失败：${error.message}`);
+  }
+}
+
+async function saveVehicleForm(form) {
+  const data = Object.fromEntries(new FormData(form));
+  try {
+    await apiRequest("/api/vehicles", {
+      method: "POST",
+      body: {
+        code: data.code.trim(),
+        plate: data.plate.trim(),
+        model: data.model.trim(),
+        status: data.status,
+        siteId: data.siteId || null,
+        monthlyRent: Number(data.monthlyRent) || 0,
+      },
+    });
+    form.reset();
+    await loadData();
+    render();
+  } catch (error) {
+    alert(`车辆保存失败：${error.message}`);
+  }
+}
+
+async function saveUserForm(form) {
+  const data = Object.fromEntries(new FormData(form));
+  try {
+    const result = await apiRequest("/api/users", {
+      method: "POST",
+      body: {
+        username: data.username.trim(),
+        name: data.name.trim(),
+        password: data.password,
+        role: data.role,
+      },
+    });
+    users = result.users || users;
+    form.reset();
+    render();
+  } catch (error) {
+    alert(`账号开通失败：${error.message}`);
+  }
+}
+
+async function saveContractForm(form) {
+  const data = Object.fromEntries(new FormData(form));
+  try {
+    await apiRequest("/api/contracts", {
+      method: "POST",
+      body: {
+        siteId: Number(data.siteId),
+        title: data.title.trim(),
+        vehicleCount: Number(data.vehicleCount) || 0,
+        startDate: data.startDate,
+        endDate: data.endDate,
+        monthlyRent: Number(data.monthlyRent) || 0,
+        deposit: Number(data.deposit) || 0,
+        paymentCycle: "monthly",
+        status: "active",
+      },
+    });
+    form.reset();
+    await loadData();
+    render();
+  } catch (error) {
+    alert(`合同保存失败：${error.message}`);
+  }
+}
+
+async function savePaymentForm(form) {
+  const data = Object.fromEntries(new FormData(form));
+  try {
+    await apiRequest("/api/payments", {
+      method: "POST",
+      body: {
+        siteId: Number(data.siteId),
+        contractId: data.contractId || null,
+        dueDate: data.dueDate || todayIso(),
+        amount: Number(data.amount) || 0,
+        paidAmount: 0,
+        status: "unpaid",
+        note: data.note.trim(),
+      },
+    });
+    form.reset();
+    await loadData();
+    render();
+  } catch (error) {
+    alert(`收款保存失败：${error.message}`);
+  }
+}
+
+async function saveTicketForm(form) {
+  const data = Object.fromEntries(new FormData(form));
+  try {
+    await apiRequest("/api/service-tickets", {
+      method: "POST",
+      body: {
+        siteId: Number(data.siteId),
+        vehicleId: data.vehicleId || null,
+        title: data.title.trim(),
+        priority: data.priority,
+        status: "open",
+        reportedAt: todayIso(),
+        summary: data.summary.trim(),
+      },
+    });
+    form.reset();
+    await loadData();
+    render();
+  } catch (error) {
+    alert(`售后保存失败：${error.message}`);
+  }
+}
+
+async function closeContract(id) {
+  const contract = getContractById(id);
+  if (!contract || contract.status !== "active") return;
+  try {
+    await apiRequest(`/api/contracts/${id}`, {
+      method: "PUT",
+      body: {
+        ...contract,
+        status: "closed",
+      },
+    });
+    await loadData();
+    render();
+  } catch (error) {
+    alert(`合同更新失败：${error.message}`);
+  }
+}
+
+async function markPaymentPaid(id) {
+  const payment = payments.find((item) => item.id === id);
+  if (!payment || payment.status === "paid") return;
+  try {
+    await apiRequest(`/api/payments/${id}`, {
+      method: "PUT",
+      body: {
+        ...payment,
+        paidAmount: Number(payment.amount) || 0,
+        paidDate: todayIso(),
+        status: "paid",
+      },
+    });
+    await loadData();
+    render();
+  } catch (error) {
+    alert(`收款更新失败：${error.message}`);
+  }
+}
+
+async function resolveTicket(id) {
+  const ticket = serviceTickets.find((item) => item.id === id);
+  if (!ticket || ticket.status === "resolved") return;
+  try {
+    await apiRequest(`/api/service-tickets/${id}`, {
+      method: "PUT",
+      body: {
+        ...ticket,
+        status: "resolved",
+        resolvedAt: todayIso(),
+      },
+    });
+    await loadData();
+    render();
+  } catch (error) {
+    alert(`售后更新失败：${error.message}`);
+  }
+}
+
 function routeScore(site) {
   const statusScore = { key: 6, active: 4, intent: 5, target: 3, paused: 0 }[site.status] || 0;
   const intentScore = { 高: 4, 中: 2, 低: 1, 未知: 1, 待判断: 1 }[site.intentLevel] || 0;
@@ -1440,6 +2295,10 @@ function startSpeech() {
 function importJsonFile(event) {
   const file = event.target.files?.[0];
   if (!file) return;
+  if (!confirm("导入会覆盖当前业务数据。系统会先自动备份当前数据库，确认继续？")) {
+    event.target.value = "";
+    return;
+  }
   const reader = new FileReader();
   reader.onload = async () => {
     try {
@@ -1447,6 +2306,11 @@ function importJsonFile(event) {
       const data = await apiRequest("/api/import", { method: "POST", body: payload });
       sites = data.sites || [];
       visits = data.visits || [];
+      vehicles = data.vehicles || [];
+      contracts = data.contracts || [];
+      payments = data.payments || [];
+      serviceTickets = data.serviceTickets || [];
+      backups = data.backups || [];
       state.routeIds = data.routeIds || [];
       state.selectedSiteId = sites[0]?.id || null;
       state.view = "map";
@@ -1458,4 +2322,14 @@ function importJsonFile(event) {
   reader.readAsText(file, "utf-8");
 }
 
+function registerServiceWorker() {
+  if (!("serviceWorker" in navigator) || location.protocol === "file:") return;
+  window.addEventListener("load", () => {
+    navigator.serviceWorker.register("/service-worker.js").catch((error) => {
+      console.warn("Service worker registration failed", error);
+    });
+  });
+}
+
 init();
+registerServiceWorker();

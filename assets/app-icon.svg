@@ -1,0 +1,6 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" role="img" aria-label="Zhituhub KXSL CRM">
+  <rect width="512" height="512" rx="96" fill="#159a72"/>
+  <path d="M96 136h320v64L214 376h206v64H90v-64l202-176H96z" fill="#ffffff"/>
+  <circle cx="356" cy="146" r="42" fill="#f3bf16"/>
+  <path d="M342 146h28m-14-14v28" stroke="#1b1f24" stroke-width="14" stroke-linecap="round"/>
+</svg>

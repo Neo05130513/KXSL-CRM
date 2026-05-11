@@ -1,0 +1,3 @@
+# Run `crontab -e` on the server and adjust the path if the project is not in /opt/kxsl-crm.
+# This example creates one SQLite file backup every day at 02:15.
+15 2 * * * cd /opt/kxsl-crm && /usr/bin/python3 /opt/kxsl-crm/server.py --backup scheduled >> /opt/kxsl-crm/data/backups/backup.log 2>&1

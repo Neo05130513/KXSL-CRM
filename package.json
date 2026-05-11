@@ -5,6 +5,7 @@
   "scripts": {
     "start": "python server.py",
     "init-db": "python server.py --init-db",
-    "check": "node --check ./src/app.js && python -m py_compile server.py"
+    "backup": "python server.py --backup manual",
+    "check": "node --check ./src/app.js && node --check ./service-worker.js && python -m py_compile server.py"
   }
 }

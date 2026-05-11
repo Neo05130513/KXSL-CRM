@@ -1,0 +1,16 @@
+[Unit]
+Description=KXSL CRM
+After=network.target
+
+[Service]
+Type=simple
+WorkingDirectory=/opt/kxsl-crm
+EnvironmentFile=/opt/kxsl-crm/.env
+ExecStart=/usr/bin/python3 /opt/kxsl-crm/server.py
+Restart=always
+RestartSec=3
+User=www-data
+Group=www-data
+
+[Install]
+WantedBy=multi-user.target
