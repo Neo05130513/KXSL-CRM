@@ -1508,6 +1508,95 @@ def nominatim_search(query, city):
     return results
 
 
+def coord_pair(point):
+    lat = float(point.get("lat"))
+    lng = float(point.get("lng"))
+    return f"{lng:.6f},{lat:.6f}"
+
+
+def parse_amap_polyline(value):
+    points = []
+    for item in str(value or "").split(";"):
+        if "," not in item:
+            continue
+        lng_text, lat_text = item.split(",", 1)
+        try:
+            points.append([round(float(lat_text), 6), round(float(lng_text), 6)])
+        except ValueError:
+            continue
+    return points
+
+
+def amap_driving_leg(origin, destination):
+    params = {
+        "key": AMAP_KEY,
+        "origin": coord_pair(origin),
+        "destination": coord_pair(destination),
+        "strategy": "10",
+        "extensions": "all",
+        "output": "json",
+    }
+    url = "https://restapi.amap.com/v3/direction/driving?" + urlencode(params)
+    payload = request_json(url)
+    if payload.get("status") != "1":
+        raise ValueError(f"高德驾车规划失败：{payload.get('info') or payload}")
+    paths = ((payload.get("route") or {}).get("paths") or [])
+    if not paths:
+        raise ValueError("高德没有返回可用驾车路线")
+    path = paths[0]
+    steps = path.get("steps") or []
+    polyline = []
+    roads = []
+    for step in steps:
+        polyline.extend(parse_amap_polyline(step.get("polyline")))
+        road = str(step.get("road") or "").strip()
+        if road and road not in roads:
+            roads.append(road)
+    return {
+        "distanceMeters": int(float(path.get("distance") or 0)),
+        "durationSeconds": int(float(path.get("duration") or 0)),
+        "polyline": polyline[:1200],
+        "roads": roads[:4],
+    }
+
+
+def amap_driving_plan(data):
+    if not AMAP_KEY:
+        raise ValueError("未配置 AMAP_KEY，无法使用高德驾车路线规划")
+    origin = data.get("origin") or {}
+    stops = data.get("stops") if isinstance(data.get("stops"), list) else []
+    if not stops:
+        raise ValueError("路线至少需要 1 个站点")
+    stops = stops[:8]
+    points = [origin] + stops
+    legs = []
+    total_distance = 0
+    total_duration = 0
+    for index in range(1, len(points)):
+        start = points[index - 1]
+        end = points[index]
+        leg = amap_driving_leg(start, end)
+        leg.update(
+            {
+                "fromName": start.get("name") or ("我的位置" if index == 1 else "上一站"),
+                "toName": end.get("name") or f"第 {index} 站",
+                "siteId": end.get("id"),
+            }
+        )
+        total_distance += leg["distanceMeters"]
+        total_duration += leg["durationSeconds"]
+        legs.append(leg)
+    return {
+        "source": "amap-driving",
+        "routeIds": [stop.get("id") for stop in stops if stop.get("id") is not None],
+        "origin": origin,
+        "distanceKm": round(total_distance / 1000, 1),
+        "durationMinutes": max(1, math.ceil(total_duration / 60)),
+        "durationHours": round(total_duration / 3600, 1),
+        "legs": legs,
+    }
+
+
 def geocode(query, city="郑州"):
     query = (query or "").strip()
     city = (city or "郑州").strip()
@@ -1683,6 +1772,9 @@ class Handler(BaseHTTPRequestHandler):
             data["imported"] = imported
             data["skipped"] = skipped
             self.send_json(data)
+            return
+        if path == "/api/route/driving":
+            self.send_json(amap_driving_plan(payload))
             return
         if path == "/api/vehicles":
             with db() as conn:

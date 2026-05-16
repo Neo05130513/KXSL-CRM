@@ -1,9 +1,9 @@
-const CACHE_NAME = "kxsl-crm-shell-v1";
+const CACHE_NAME = "kxsl-crm-shell-v13";
 const SHELL_ASSETS = [
   "/",
   "/index.html",
-  "/src/styles.css",
-  "/src/app.js",
+  "/src/styles.css?v=20260513-amap-uri",
+  "/src/app.js?v=20260513-amap-uri",
   "/manifest.webmanifest",
   "/assets/app-icon.svg",
   "/assets/icon-192.png",
